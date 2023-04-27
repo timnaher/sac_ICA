@@ -2,6 +2,9 @@
 import numpy as np
 import mne
 import matplotlib.pyplot as plt
+from sacdetect import msdetect
+
+# TODO: find sync pule in both time series to align them
 
 # %%
 input_fname =  'data/freeviewing/EEG_freeviewing_25channels.set'
@@ -16,109 +19,25 @@ eeg = data.get_data()
 eyedata = np.loadtxt('data/freeviewing/eyetracker_freeviewing_new.txt', delimiter='\t', skiprows=1, usecols=range(7, 12))
 eyedata = eyedata[:eeg[0,:].shape[0],:]
 
-# cut both the eeg and eyedata to the same length
+
+# %% ICA
+
+ica = mne.preprocessing.ICA()
+ica.fit(data)
+ica.plot_components()
+ica.plot_sources(data)
+
+plt.plot(test.get_data()[2,:]); plt.show()
 
 # %%
-# run saccade detection based on EG algorithm
-import numpy as np
 
+data2use = eyedata[:,2:4].T
 
-def msdetect(data, VFAC, MINDUR, srate, mergeint):
-    temp_data = np.zeros((2, data.shape[1]))
-    temp_data[0,:] = data[0,:]
-    temp_data[1,:] = data[1,:]
+out = msdetect(data=data2use, VFAC=2.8, MINDUR=4, srate=500, mergeint = 10)
+print(out.shape)
 
-    # velocity
-    v = np.zeros((2, data.shape[1]-1))
-    v[0,:] = np.diff(temp_data[0,:])
-    v[1,:] = np.diff(temp_data[1,:])
-
-    # if the velocity is higher than 250, make it nan
-    v_thresh = v.copy()
-
-    # get indicies
-    inds1 = np.where(np.abs(v_thresh[0,:]) > 50)[0]
-    inds2 = np.where(np.abs(v_thresh[1,:]) > 50)[0]
-
-    # set these and also the surrounding 5 values to nan
-    for sur in np.linspace(-10,10,21):
-        v_thresh[0,np.subtract(inds1,sur).astype(int)] = np.nan
-        v_thresh[1,np.subtract(inds2,sur).astype(int)] = np.nan
-
-
-    # compute SD based on median estimator
-    medx = np.nanmedian(v_thresh[0,:])
-    msdx = np.sqrt(np.median((v[0,:]-medx)**2))
-    medy = np.nanmedian(v_thresh[1,:])
-    msdy = np.sqrt(np.median((v[1,:]-medy)**2))
-
-    # elliptical threshold
-    radiusx = VFAC * msdx
-    radiusy = VFAC * msdy
-
-    # find possible saccadic events
-    test = (v[0,:]/radiusx)**2 + (v[1,:]/radiusy)**2
-    indx = np.where(test > 1)[0]
-
-    # detect MSs here
-    N    = len(indx)
-    sac  = np.zeros((1,7))
-    nsac = 0
-    dur  = 1
-    a    = 0
-    k    = 0
-
-    while k<N-1:
-        if indx[k+1]-indx[k]==1:
-            dur = dur + 1
-        else:
-            # duration > MINDUR?
-            if (dur >= MINDUR):
-                nsac = nsac + 1
-                b = k
-                sac = np.vstack((sac,[indx[a],indx[b],0,0,0,0,0]))
-            a = k+1
-            dur = 1
-        k = k + 1
-    # last saccade: duration > MINDUR?
-    if (dur >= MINDUR):
-        nsac = nsac + 1
-        b = k
-        sac = np.vstack((sac,[indx[a],indx[b],0,0,0,0,0]))
-
-    sac = sac[1:,:]
-
-
-    # merge if 2 saccades are not separated by the merge interval
-    for s in range(sac.shape[0]-1):
-        if (sac[s+1,0] - sac[s,1]) <= mergeint:
-            sac[s+1,0] = sac[s,0]
-            sac[s,:] = np.nan
-    sac = sac[~np.isnan(sac[:,0]),:]
-
-    if sac.size == 0:
-        return [],[]
-
-    # create sac vector with saccade information
-    v = v.T
-    
-    nsac = sac.shape[0]
-    if nsac>0:
-        for isac,s in enumerate(sac):
-            a = int(s[0])
-            b = int(s[1])
-            idx = np.arange(a,b+1,dtype=int)
-
-            vpeak = np.max( np.sqrt( v[idx,0]**2 + v[idx,1]**2 ) )
-            sac[isac,2] = vpeak
-
-            dx = data[0,b]-data[0,a]
-            dy = data[0,b]-data[0,a]
-            sac[isac,3] = dx
-            sac[isac,4] = dy
-
-    return sac
-
-
-out = msdetect(eyedata[1:5000,0:2].T, 2.5, 5, 1000, 5)
+plt.plot(data2use.T)
+# plot horizontal bars where saccades are detected. The saccade onsets are in out[:,0] and the saccade offsets are in out[:,1]
+plt.vlines(out[:,0], -100, 1200, color='r')
+plt.vlines(out[:,1], -100, 1200, color='g')
 # %%
