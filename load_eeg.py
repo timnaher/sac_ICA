@@ -23,7 +23,6 @@ sacdet = SaccadeDetector(algorithm='EK',srate=500,VFAC=2,MINDUR=4,MERGEINT=10)
 
 # get the saccade predictions
 sac_preds = sacdet.predict(eyedata[:,0:4].T)
-print(sac_preds.shape)
 
 # %% ICA
 

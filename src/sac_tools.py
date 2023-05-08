@@ -1,7 +1,12 @@
+ #%%
 import numpy as np
 import matplotlib.pyplot as plt
+import uneye
+
 # TODO:
 # Implement the NN algorithm
+# - fix the dependencies
+# - maybe fix the uneye package for this
 
 class SaccadeDetector:
     def __init__(self, algorithm='EK',srate=1000,VFAC=None,MINDUR=None,MERGEINT=None,X=None,NN_weights=None):
@@ -10,6 +15,10 @@ class SaccadeDetector:
         self.VFAC      = VFAC
         self.MINDUR    = MINDUR
         self.MERGEINT  = MERGEINT
+        self.X         = X
+        self.NN_weights = NN_weights
+        self.Probability = None
+        self.Prediction  = None
 
     def check_input_data(self, X):
         if not isinstance(X, np.ndarray):
@@ -36,6 +45,7 @@ class SaccadeDetector:
 
     def predict(self, X):
         self.X = X
+        print(self.X.shape)
         # check if the data X is a 2D array with 2 or 4 rows
         self.check_input_data(X) # check if the input data is valid, throw error if not
         self.check_if_binocular(X) # check if the data is binocular
@@ -47,6 +57,21 @@ class SaccadeDetector:
 
         if self.algorithm == 'NN':
             return self._NN(self.X)
+
+
+    def _NN(self,data):
+        # this is the neural network algorithm thake the data and run uneye
+        model = uneye.DNN(
+                weights_name=self.NN_weights,
+                sampfreq=self.srate,
+                min_sacc_dur=self.MINDUR,
+                min_sacc_dist=self.MERGEINT,
+                )
+
+
+        Prediction,Probability = model.predict(data[0,:], data[1,:])
+        self.Prediction  = Prediction
+        self.Probability = Probability
 
     
     def _EK(self,data):
@@ -150,7 +175,6 @@ class SaccadeDetector:
                 sacbin[0,int(sac[s,0]):int(sac[s,1])] = 1
 
             self.sacbin += sacbin
-        plt.plot(self.sacbin[0,:10000])
         # merge the two eyes
         if self.binocular == True:
             self.sacbin = (self.sacbin>1)*1
@@ -183,3 +207,37 @@ class SaccadeDetector:
                 sac[isac,4] = dy
 
         return sac
+
+
+
+if __name__ == '__main__':
+    import numpy as np
+    import mne
+    from src.sac_tools import SaccadeDetector
+
+    # TODO: find sync pule in both time series to align them
+
+
+    input_fname =  '/cs/home/naehert/projects/sac_ICA/data/freeviewing/EEG_freeviewing_25channels.set'
+    data = mne.io.read_raw_eeglab(input_fname,preload=True, verbose=True)
+    annotations = mne.read_annotations(input_fname)
+    # add the annotations to the data
+    data.set_annotations(annotations)
+    # get the time vector
+    time = data.times
+    eeg = data.get_data()
+
+    eyedata = np.loadtxt('/cs/home/naehert/projects/sac_ICA/data/freeviewing/eyetracker_freeviewing_new.txt', delimiter='\t', skiprows=1, usecols=range(7, 12))
+    eyedata = eyedata[:eeg[0,:].shape[0],:]
+
+    sacdet = SaccadeDetector(algorithm='NN',srate=500,VFAC=2,MINDUR=4,MERGEINT=10,NN_weights='/cs/home/naehert/projects/sac_ICA/external/uneye/training/weights_1+2+3')
+
+    # get the saccade predictions
+    sac_preds = sacdet.predict(eyedata[:,0:4].T)
+
+
+
+
+
+
+# %%
