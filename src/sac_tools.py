@@ -2,14 +2,30 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import uneye
+from sklearn.cluster import KMeans
+
+
 
 # TODO:
-# Implement the NN algorithm
-# - fix the dependencies
-# - maybe fix the uneye package for this
+# fix the units of the eye data
+# based on srate and input metrics
+
+
+def blink_detection(X,tol):
+    # only take one eye channels, e.g. first row
+    single_X = X[0,:]
+    single_X         = np.abs(np.diff(single_X)) # compute the absolute velocity between each sample
+    blinkbool = np.zeros(X.shape[1])
+    kmeans    = KMeans(n_clusters=2, random_state=0, n_init="auto").fit(single_X[:,np.newaxis]) # cluster the data into 2 clusters
+    for on,off in zip(np.where(kmeans.labels_==1)[0][::2], np.where(kmeans.labels_==1)[0][1::2]):
+        blinkbool[(on-tol):(off+tol)] = 1
+    print(blinkbool.shape)
+    X[:,blinkbool==1] = np.nan
+    
+    return blinkbool, X
 
 class SaccadeDetector:
-    def __init__(self, algorithm='EK',srate=1000,VFAC=None,MINDUR=None,MERGEINT=None,X=None,NN_weights=None):
+    def __init__(self, algorithm='EK',srate=1000,VFAC=None,MINDUR=None,MERGEINT=None,X=None,NN_weights=None,ppd=None):
         self.algorithm = algorithm
         self.srate     = srate
         self.VFAC      = VFAC
@@ -19,6 +35,7 @@ class SaccadeDetector:
         self.NN_weights = NN_weights
         self.Probability = None
         self.Prediction  = None
+        self.ppd         = None
 
     def check_input_data(self, X):
         if not isinstance(X, np.ndarray):
@@ -35,6 +52,11 @@ class SaccadeDetector:
             raise Exception('MINDUR is required for EK algorithm. Specify MINDUR when initializing the SaccadeDetector class.')
         if self.MERGEINT is None:
             raise Exception('MERGEINT is required for EK algorithm. Specify MERGEINT when initializing the SaccadeDetector class.')
+
+
+    def check_NN_params(self):
+        if self.NN_weights is None:
+            raise Exception('NN_weights is required for NN algorithm. Specify NN_weights when initializing the SaccadeDetector class.')
 
 
     def check_if_binocular(self, X):
@@ -56,6 +78,7 @@ class SaccadeDetector:
             return self._EK(self.X)
 
         if self.algorithm == 'NN':
+            self.check_NN_params()
             return self._NN(self.X)
 
 
@@ -70,8 +93,56 @@ class SaccadeDetector:
 
 
         Prediction,Probability = model.predict(data[0,:], data[1,:])
-        self.Prediction  = Prediction
-        self.Probability = Probability
+        self.Prediction        = Prediction
+        self.Probability       = Probability
+
+
+        # find onsets and offsets
+        onsets  = np.where(np.diff(Prediction) == 1)[0]
+        offsets = np.where(np.diff(Prediction) == -1)[0]
+
+
+        if self.binocular:
+            eyes = [0,2]
+        else:
+            eyes = [0]
+
+        for eye in eyes:
+            data           = self.X[eye:eye+2,:] # select the data for the current eye
+            temp_data      = np.zeros((2, data.shape[1]))
+            temp_data[0,:] = data[0,:]
+            temp_data[1,:] = data[1,:]
+
+            # velocity
+            v = np.zeros((2, data.shape[1]-1))
+            v[0,:] = np.diff(temp_data[0,:])
+            v[1,:] = np.diff(temp_data[1,:])
+
+        
+        # adjust the onsets and offsets in the sac matrix
+        sac = np.zeros((onsets.shape[0],7))
+        for i in range(onsets.shape[0]):
+            sac[i,0] = onsets[i]
+            sac[i,1] = offsets[i]
+
+        # create sac vector with saccade information
+        v = v.T
+
+        nsac = sac.shape[0]
+        if nsac>0:
+            for isac,s in enumerate(sac):
+                a = int(s[0])
+                b = int(s[1])
+                idx = np.arange(a,b+1,dtype=int)
+                vpeak = np.max( np.sqrt( v[idx,0]**2 + v[idx,1]**2 ) )
+                sac[isac,2] = vpeak
+                dx = data[0,b]-data[0,a]
+                dy = data[0,b]-data[0,a]
+                sac[isac,3] = dx
+                sac[isac,4] = dy
+                sac[isac,5] = np.sqrt((data[0,a]-data[0,b])**2+(data[1,a]-data[1,b])**2) 
+
+        return sac
 
     
     def _EK(self,data):
@@ -205,6 +276,7 @@ class SaccadeDetector:
                 dy = data[0,b]-data[0,a]
                 sac[isac,3] = dx
                 sac[isac,4] = dy
+                sac[isac,5] = np.sqrt((data[0,a]-data[0,b])**2+(data[1,a]-data[1,b])**2)
 
         return sac
 
@@ -230,13 +302,18 @@ if __name__ == '__main__':
     eyedata = np.loadtxt('/cs/home/naehert/projects/sac_ICA/data/freeviewing/eyetracker_freeviewing_new.txt', delimiter='\t', skiprows=1, usecols=range(7, 12))
     eyedata = eyedata[:eeg[0,:].shape[0],:]
 
-    sacdet = SaccadeDetector(algorithm='NN',srate=500,VFAC=2,MINDUR=4,MERGEINT=10,NN_weights='/cs/home/naehert/projects/sac_ICA/external/uneye/training/weights_1+2+3')
+    sacdet = SaccadeDetector(algorithm='EK',srate=500,VFAC=2,MINDUR=4,MERGEINT=10,NN_weights='/cs/home/naehert/projects/sac_ICA/external/uneye/training/weights_1+2+3')
 
     # get the saccade predictions
     sac_preds = sacdet.predict(eyedata[:,0:4].T)
+    print(sac_preds.shape)
 
 
+    plt.scatter(sac_preds[:,5],sac_preds[:,2])
 
+    # set xlim to be 10000
+    plt.xlim([0,500])
+    plt.ylim([0,65])
 
 
 
